@@ -113,3 +113,4 @@ class MergeAuditLedger(Base):
     unmerged_reason = Column(Text, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     unmerged_at = Column(DateTime, nullable=True)
+

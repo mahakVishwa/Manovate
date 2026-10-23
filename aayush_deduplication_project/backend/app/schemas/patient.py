@@ -78,3 +78,4 @@ class MasterPatientDetail(BaseModel):
     created_at: datetime
     updated_at: datetime
     timeline: List[ClinicalTimelineEvent] = []
+
