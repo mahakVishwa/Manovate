@@ -159,22 +159,46 @@ class DualMatchingEngine:
         Evaluates a candidate pair across all demographic vectors and returns
         the full confidence scoring, decision bucket, and explanation.
         """
-        name_a = rec_a.get("cleaned_name", "")
-        name_b = rec_b.get("cleaned_name", "")
+        name_a = (rec_a.get("cleaned_name") or rec_a.get("raw_name") or "").strip()
+        name_b = (rec_b.get("cleaned_name") or rec_b.get("raw_name") or "").strip()
 
-        phone_a = rec_a.get("cleaned_phone", "")
-        phone_b = rec_b.get("cleaned_phone", "")
+        phone_a = (rec_a.get("cleaned_phone") or rec_a.get("raw_phone") or "").strip()
+        phone_b = (rec_b.get("cleaned_phone") or rec_b.get("raw_phone") or "").strip()
 
-        dob_a = rec_a.get("cleaned_dob", "")
-        dob_b = rec_b.get("cleaned_dob", "")
+        dob_a = (rec_a.get("cleaned_dob") or rec_a.get("raw_dob") or "").strip()
+        dob_b = (rec_b.get("cleaned_dob") or rec_b.get("raw_dob") or "").strip()
 
-        pin_a = rec_a.get("cleaned_pin", "")
-        pin_b = rec_b.get("cleaned_pin", "")
+        pin_a = (rec_a.get("cleaned_pin") or rec_a.get("raw_pin") or "").strip()
+        pin_b = (rec_b.get("cleaned_pin") or rec_b.get("raw_pin") or "").strip()
 
         shared_family_phone = (
             rec_a.get("shared_family_phone", False) or 
             rec_b.get("shared_family_phone", False)
         )
+
+        # Immediate zero check for blank or missing names
+        if not name_a or not name_b:
+            return {
+                "record_a_id": rec_a.get("record_id", "A"),
+                "record_b_id": rec_b.get("record_id", "B"),
+                "record_a_name": name_a,
+                "record_b_name": name_b,
+                "record_a_branch": rec_a.get("source_branch", ""),
+                "record_b_branch": rec_b.get("source_branch", ""),
+                "record_a_phone": phone_a,
+                "record_b_phone": phone_b,
+                "record_a_dob": dob_a,
+                "record_b_dob": dob_b,
+                "record_a_pin": pin_a,
+                "record_b_pin": pin_b,
+                "jaro_winkler_score": 0.0,
+                "levenshtein_score": 0.0,
+                "vector_cosine_score": 0.0,
+                "hybrid_confidence_score": 0.0,
+                "decision_bucket": "New Patient",
+                "shared_family_phone_flag": shared_family_phone,
+                "explanation": "One or both patient identity vectors are blank. Confidence score is 0%."
+            }
 
         jw, lev, vec, name_score = self.compute_hybrid_name_score(name_a, name_b)
 

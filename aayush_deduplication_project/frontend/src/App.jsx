@@ -329,48 +329,235 @@ export default function App() {
     }
   };
 
-  // Client-side quick simulator for Judge Playground
+// Mathematical Jaro-Winkler with prefix scaling & order-invariance
+function calcJaroWinkler(s1, s2) {
+  if (!s1 || !s2) return 0.0;
+  const a = s1.toLowerCase().trim();
+  const b = s2.toLowerCase().trim();
+  if (a === b) return 1.0;
+
+  const rawJaro = (str1, str2) => {
+    const len1 = str1.length;
+    const len2 = str2.length;
+    if (len1 === 0 || len2 === 0) return 0.0;
+    const matchDistance = Math.floor(Math.max(len1, len2) / 2) - 1;
+    const m1 = new Array(len1).fill(false);
+    const m2 = new Array(len2).fill(false);
+    let matches = 0;
+    for (let i = 0; i < len1; i++) {
+      const start = Math.max(0, i - matchDistance);
+      const end = Math.min(i + matchDistance + 1, len2);
+      for (let j = start; j < end; j++) {
+        if (m2[j] || str1[i] !== str2[j]) continue;
+        m1[i] = true;
+        m2[j] = true;
+        matches++;
+        break;
+      }
+    }
+    if (matches === 0) return 0.0;
+    let transpositions = 0;
+    let k = 0;
+    for (let i = 0; i < len1; i++) {
+      if (!m1[i]) continue;
+      while (!m2[k]) k++;
+      if (str1[i] !== str2[k]) transpositions++;
+      k++;
+    }
+    const jaro = (matches / len1 + matches / len2 + (matches - transpositions / 2) / matches) / 3;
+    let prefix = 0;
+    for (let i = 0; i < Math.min(4, Math.min(len1, len2)); i++) {
+      if (str1[i] === str2[i]) prefix++;
+      else break;
+    }
+    return Math.min(1.0, jaro + prefix * 0.1 * (1 - jaro));
+  };
+
+  const rawScore = rawJaro(a, b);
+  const sortedA = a.split(/\s+/).sort().join(' ');
+  const sortedB = b.split(/\s+/).sort().join(' ');
+  const sortedScore = rawJaro(sortedA, sortedB);
+  return Math.max(rawScore, sortedScore);
+}
+
+// Normalized Levenshtein similarity (1.0 = identical, 0.0 = completely different)
+function calcLevenshtein(s1, s2) {
+  if (!s1 || !s2) return 0.0;
+  const a = s1.toLowerCase().trim();
+  const b = s2.toLowerCase().trim();
+  if (a === b) return 1.0;
+
+  const rawLev = (str1, str2) => {
+    const m = str1.length;
+    const n = str2.length;
+    if (m === 0 || n === 0) return 0.0;
+    const dp = Array.from({ length: m + 1 }, () => new Array(n + 1).fill(0));
+    for (let i = 0; i <= m; i++) dp[i][0] = i;
+    for (let j = 0; j <= n; j++) dp[0][j] = j;
+    for (let i = 1; i <= m; i++) {
+      for (let j = 1; j <= n; j++) {
+        const cost = str1[i - 1] === str2[j - 1] ? 0 : 1;
+        dp[i][j] = Math.min(dp[i - 1][j] + 1, dp[i][j - 1] + 1, dp[i - 1][j - 1] + cost);
+      }
+    }
+    const dist = dp[m][n];
+    return Math.max(0.0, 1.0 - dist / Math.max(m, n));
+  };
+
+  const rawScore = rawLev(a, b);
+  const sortedA = a.split(/\s+/).sort().join(' ');
+  const sortedB = b.split(/\s+/).sort().join(' ');
+  const sortedScore = rawLev(sortedA, sortedB);
+  return Math.max(rawScore, sortedScore);
+}
+
+// Character 2-gram vector cosine & token set similarity
+function calcVectorCosine(s1, s2) {
+  if (!s1 || !s2) return 0.0;
+  const a = s1.toLowerCase().trim();
+  const b = s2.toLowerCase().trim();
+  if (a === b) return 1.0;
+
+  // Exact token match (order-invariant) e.g., "Malviya Aaditya" vs "Aaditya Malviya"
+  const t1 = a.split(/\s+/).sort().join(' ');
+  const t2 = b.split(/\s+/).sort().join(' ');
+  if (t1 === t2) return 1.0;
+
+  const getNgrams = (str) => {
+    const grams = {};
+    const pad = ' ' + str + ' ';
+    for (let i = 0; i < pad.length - 1; i++) {
+      const g = pad.slice(i, i + 2);
+      grams[g] = (grams[g] || 0) + 1;
+    }
+    return grams;
+  };
+
+  const g1 = getNgrams(a);
+  const g2 = getNgrams(b);
+
+  let dot = 0;
+  for (const k in g1) {
+    if (g2[k]) dot += g1[k] * g2[k];
+  }
+
+  let mag1 = 0;
+  for (const k in g1) mag1 += g1[k] * g1[k];
+  let mag2 = 0;
+  for (const k in g2) mag2 += g2[k] * g2[k];
+
+  if (mag1 === 0 || mag2 === 0) return 0.0;
+  const cosine = dot / (Math.sqrt(mag1) * Math.sqrt(mag2));
+
+  // Initials / abbreviation bonus (e.g. "R. K." vs "Ram Kumar")
+  const l1 = a.split(/\s+/).map(x => x.replace(/\./g, ''));
+  const l2 = b.split(/\s+/).map(x => x.replace(/\./g, ''));
+  let bonus = 0;
+  if (l1.length === l2.length && l1.length > 0) {
+    let matchCount = 0;
+    for (let i = 0; i < l1.length; i++) {
+      if (l1[i] === l2[i]) matchCount++;
+      else if ((l1[i].length === 1 && l2[i].startsWith(l1[i])) || (l2[i].length === 1 && l1[i].startsWith(l2[i]))) {
+        matchCount += 0.95;
+      }
+    }
+    if (matchCount >= l1.length) bonus = 0.25;
+  }
+
+  return Math.min(1.0, cosine + bonus);
+}
+
+  // Client-side mathematical scoring engine for Judge Playground
   const computeClientScore = () => {
     // Strip honorifics
-    const stripH = (str) => str.replace(/^(dr\.?|vaidya|shri|smt\.?|kumari|master|prof\.?)\s+/i, '').trim();
-    const cleanPhone = (p) => p.replace(/\D/g, '').slice(-10);
+    const stripH = (str) => {
+      if (!str) return '';
+      return str.replace(/^(dr\.?|vaidya|vaid|shri|shree|smt\.?|shrimati|kumari|km\.?|mr\.?|mrs\.?|ms\.?|prof\.?|master|late|adv\.?)\s+/i, '').trim();
+    };
+    const cleanPhone = (p) => {
+      if (!p) return '';
+      const d = p.replace(/\D/g, '');
+      return d.length >= 10 ? d.slice(-10) : d;
+    };
 
-    const nameA = stripH(judgeInputA.name);
-    const nameB = stripH(judgeInputB.name);
+    const rawA = judgeInputA.name || '';
+    const rawB = judgeInputB.name || '';
+
+    // If either name is blank or empty, return 0%
+    if (!rawA.trim() || !rawB.trim()) {
+      return {
+        cleanedNameA: stripH(rawA),
+        cleanedNameB: stripH(rawB),
+        cleanedPhoneA: cleanPhone(judgeInputA.phone),
+        cleanedPhoneB: cleanPhone(judgeInputB.phone),
+        jwScore: 0,
+        levScore: 0,
+        vecScore: 0,
+        hybridScore: 0,
+        bucket: "New Patient",
+        alertMsg: "One or both patient names are blank. Confidence score is 0%."
+      };
+    }
+
+    const nameA = stripH(rawA);
+    const nameB = stripH(rawB);
+
+    if (!nameA || !nameB) {
+      return {
+        cleanedNameA: nameA,
+        cleanedNameB: nameB,
+        cleanedPhoneA: cleanPhone(judgeInputA.phone),
+        cleanedPhoneB: cleanPhone(judgeInputB.phone),
+        jwScore: 0,
+        levScore: 0,
+        vecScore: 0,
+        hybridScore: 0,
+        bucket: "New Patient",
+        alertMsg: "One or both patient names are blank after removing titles. Confidence score is 0%."
+      };
+    }
+
+    const jw = calcJaroWinkler(nameA, nameB);
+    const lev = calcLevenshtein(nameA, nameB);
+    const vec = calcVectorCosine(nameA, nameB);
+
+    // Core hybrid metric: w1=0.35, w2=0.25, w3=0.40
+    let nameScore = (0.35 * jw) + (0.25 * lev) + (0.40 * vec);
+
     const phoneA = cleanPhone(judgeInputA.phone);
     const phoneB = cleanPhone(judgeInputB.phone);
-    const dobMatch = judgeInputA.dob.replace(/\D/g, '') === judgeInputB.dob.replace(/\D/g, '');
-    const phoneMatch = phoneA && phoneB && phoneA === phoneB;
+    const dobA = (judgeInputA.dob || '').trim();
+    const dobB = (judgeInputB.dob || '').trim();
 
-    // Token set order check
-    const tA = nameA.toLowerCase().split(/\s+/).sort().join(' ');
-    const tB = nameB.toLowerCase().split(/\s+/).sort().join(' ');
-    let vecScore = tA === tB ? 1.0 : 0.65;
-    if (nameA.toLowerCase() === nameB.toLowerCase()) vecScore = 1.0;
+    const phoneExact = phoneA && phoneB && phoneA.length === 10 && phoneA === phoneB;
+    const dobExact = dobA && dobB && dobA.replace(/\D/g, '') === dobB.replace(/\D/g, '');
 
-    // Jaro-Winkler estimate
-    let jwScore = tA === tB ? 1.0 : (nameA.slice(0, 3).toLowerCase() === nameB.slice(0, 3).toLowerCase() ? 0.92 : 0.70);
-    // Levenshtein estimate
-    let levScore = tA === tB ? 1.0 : 0.85;
+    let overall = nameScore;
 
-    let hybrid = (0.35 * jwScore) + (0.25 * levScore) + (0.40 * vecScore);
-
-    if (phoneMatch && dobMatch) {
-      hybrid = Math.min(1.0, hybrid * 0.70 + 0.30);
+    // Multi-attribute boost only applies when names have meaningful similarity (> 0.40)
+    if (nameScore > 0.40) {
+      if (phoneExact && dobExact) {
+        overall = Math.min(1.0, overall * 0.70 + 0.30);
+      } else if (phoneExact && !dobExact && dobA && dobB) {
+        overall = overall * 0.85;
+      }
+    } else if (nameScore === 0.0) {
+      // Completely distinct names stay strictly at 0!
+      overall = 0.0;
     }
 
     let bucket = "New Patient";
     let alertMsg = null;
 
-    if (hybrid >= 0.95) {
+    if (overall >= 0.95) {
       bucket = "Exact Match";
-    } else if (hybrid >= 0.75) {
+    } else if (overall >= 0.75) {
       bucket = "Possible Match";
     }
 
-    // Safety Interlock
-    if (sharedPhoneCount >= 3 && phoneMatch) {
-      if (bucket === "Exact Match" && hybrid < 0.99) {
+    // Safety Interlock: Multi-generational shared family phone
+    if (sharedPhoneCount >= 3 && phoneExact) {
+      if (bucket === "Exact Match" && nameScore < 0.95) {
         bucket = "Possible Match";
         alertMsg = "[Safety Interlock Active] Shared Family Phone flagged (>= 3 distinct household members). Auto-merge deactivated to prevent combining family member records.";
       }
@@ -381,10 +568,10 @@ export default function App() {
       cleanedNameB: nameB,
       cleanedPhoneA: phoneA,
       cleanedPhoneB: phoneB,
-      jwScore: Math.round(jwScore * 100),
-      levScore: Math.round(levScore * 100),
-      vecScore: Math.round(vecScore * 100),
-      hybridScore: Math.round(hybrid * 100),
+      jwScore: Math.round(jw * 100),
+      levScore: Math.round(lev * 100),
+      vecScore: Math.round(vec * 100),
+      hybridScore: Math.round(overall * 100),
       bucket,
       alertMsg
     };
@@ -1371,3 +1558,4 @@ export default function App() {
     </div>
   );
 }
+

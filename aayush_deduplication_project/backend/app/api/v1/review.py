@@ -12,9 +12,55 @@ from app.models.patient import (
     MasterPatientIndex,
     MergeAuditLedger
 )
-from app.schemas.patient import ReviewDecisionRequest, UnmergeRequest
+from app.schemas.patient import ReviewDecisionRequest, UnmergeRequest, LiveEvaluateRequest
+from app.core.parser import strip_honorifics, normalize_phone_number, normalize_dob, normalize_pincode
+from app.core.matching import matching_engine
 
 router = APIRouter(prefix="/review", tags=["Review Queue & Safety Nets"])
+
+@router.post("/evaluate-live")
+def evaluate_pair_live(req: LiveEvaluateRequest):
+    """
+    Evaluates two identity vectors live using the core dual-matching engine.
+    Returns 0.0 scores if either vector is blank or completely distinct.
+    """
+    name_a = strip_honorifics(req.name_a)
+    name_b = strip_honorifics(req.name_b)
+
+    rec_a = {
+        "record_id": "PROFILE_A",
+        "cleaned_name": name_a,
+        "raw_name": req.name_a,
+        "cleaned_phone": normalize_phone_number(req.phone_a),
+        "cleaned_dob": normalize_dob(req.dob_a),
+        "cleaned_pin": normalize_pincode(req.pin_a),
+        "shared_family_phone": req.shared_family_phone,
+        "source_branch": "Branch A"
+    }
+
+    rec_b = {
+        "record_id": "PROFILE_B",
+        "cleaned_name": name_b,
+        "raw_name": req.name_b,
+        "cleaned_phone": normalize_phone_number(req.phone_b),
+        "cleaned_dob": normalize_dob(req.dob_b),
+        "cleaned_pin": normalize_pincode(req.pin_b),
+        "shared_family_phone": req.shared_family_phone,
+        "source_branch": "Branch B"
+    }
+
+    result = matching_engine.evaluate_pair(rec_a, rec_b)
+    return {
+        "cleaned_name_a": name_a,
+        "cleaned_name_b": name_b,
+        "jaro_winkler_score": round(result["jaro_winkler_score"] * 100, 2),
+        "levenshtein_score": round(result["levenshtein_score"] * 100, 2),
+        "vector_cosine_score": round(result["vector_cosine_score"] * 100, 2),
+        "hybrid_confidence_score": round(result["hybrid_confidence_score"] * 100, 2),
+        "decision_bucket": result["decision_bucket"],
+        "shared_family_phone_flag": result["shared_family_phone_flag"],
+        "explanation": result["explanation"]
+    }
 
 @router.get("/queue")
 def list_review_queue(status: Optional[str] = "PENDING", db: Session = Depends(get_db)):

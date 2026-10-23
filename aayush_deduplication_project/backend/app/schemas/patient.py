@@ -48,6 +48,17 @@ class MatchScoreBreakdown(BaseModel):
     shared_family_phone_flag: bool
     explanation: str
 
+class LiveEvaluateRequest(BaseModel):
+    name_a: str = ""
+    phone_a: Optional[str] = ""
+    dob_a: Optional[str] = ""
+    pin_a: Optional[str] = ""
+    name_b: str = ""
+    phone_b: Optional[str] = ""
+    dob_b: Optional[str] = ""
+    pin_b: Optional[str] = ""
+    shared_family_phone: bool = False
+
 class ReviewDecisionRequest(BaseModel):
     candidate_pair_id: Optional[str] = None
     record_a_id: str
